@@ -2,6 +2,8 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js"
 import { StdioClientTransport, StdioServerParameters } from "@modelcontextprotocol/sdk/client/stdio.js"
 import {
 	CallToolResultSchema,
+	CreateMessageRequestSchema,
+	CreateMessageResultSchema,
 	ListResourcesResultSchema,
 	ListResourceTemplatesResultSchema,
 	ListToolsResultSchema,
@@ -20,6 +22,9 @@ import {
 	McpResource,
 	McpResourceResponse,
 	McpResourceTemplate,
+	McpSamplingMessage,
+	McpSamplingRequest,
+	McpSamplingResponse,
 	McpServer,
 	McpTool,
 	McpToolCallResponse,
@@ -55,6 +60,7 @@ export class McpHub {
 	private fileWatchers: Map<string, FSWatcher> = new Map()
 	connections: McpConnection[] = []
 	isConnecting: boolean = false
+	private approvedSamplingServers: Set<string> = new Set()
 
 	constructor(provider: ClineProvider) {
 		this.providerRef = new WeakRef(provider)
@@ -92,7 +98,7 @@ export class McpHub {
 				mcpSettingsFilePath,
 				`{
   "mcpServers": {
-    
+
   }
 }`,
 			)
@@ -155,7 +161,41 @@ export class McpHub {
 					version: this.providerRef.deref()?.context.extension?.packageJSON?.version ?? "1.0.0",
 				},
 				{
-					capabilities: {},
+					capabilities: {
+						sampling: {
+							createMessage: {
+								handler: async (request: any) => {
+									try {
+										// Convert the request to our internal format
+										const samplingRequest: McpSamplingRequest = {
+											messages: request.messages,
+											modelPreferences: request.modelPreferences,
+											systemPrompt: request.systemPrompt,
+											includeContext: request.includeContext,
+											temperature: request.temperature,
+											maxTokens: request.maxTokens,
+											stopSequences: request.stopSequences,
+											metadata: request.metadata
+										}
+
+										// Use our createMessage method to handle the sampling request
+										const response = await this.createMessage(name, samplingRequest)
+
+										// Return the response in the format expected by the MCP SDK
+										return {
+											completion: response.completion,
+											model: response.model,
+											finishReason: response.finishReason,
+											metadata: response.metadata
+										}
+									} catch (error) {
+										console.error(`Sampling error for ${name}:`, error)
+										throw error
+									}
+								}
+							}
+						}
+					},
 				},
 			)
 
@@ -596,6 +636,120 @@ export class McpHub {
 			},
 			CallToolResultSchema,
 		)
+	}
+
+	/**
+	 * Handle a sampling request from an MCP server.
+	 * This allows MCP servers to request LLM completions through the client.
+	 *
+	 * @param serverName The name of the MCP server making the request
+	 * @param request The sampling request parameters
+	 * @returns The sampling response with the LLM completion
+	 */
+	async createMessage(serverName: string, request: McpSamplingRequest): Promise<McpSamplingResponse> {
+		const connection = this.connections.find((conn) => conn.server.name === serverName)
+		if (!connection) {
+			throw new Error(
+				`No connection found for server: ${serverName}. Please make sure to use MCP servers available under 'Connected MCP Servers'.`,
+			)
+		}
+
+		if (connection.server.disabled) {
+			throw new Error(`Server "${serverName}" is disabled and cannot be used`)
+		}
+
+		// Get the approval mode from settings
+		const approvalMode = vscode.workspace.getConfiguration("cline.mcp.sampling").get<string>("approvalMode", "always")
+
+		// Check if we need to ask for approval
+		let needsApproval = true
+
+		if (approvalMode === "never") {
+			// Never ask for approval
+			needsApproval = false
+		} else if (approvalMode === "first-time" && this.approvedSamplingServers.has(serverName)) {
+			// First-time mode and this server has been approved before
+			needsApproval = false
+		}
+
+		if (needsApproval) {
+			// Show a notification to the user about the sampling request
+			const serverDisplayName = serverName
+			const messageCount = request.messages.length
+			const modelHints = request.modelPreferences?.hints?.map(h => h.name).join(", ") || "default"
+
+			// Ask the user for permission to proceed with the sampling request
+			const userResponse = await vscode.window.showInformationMessage(
+				`MCP server "${serverDisplayName}" is requesting to use the LLM with ${messageCount} messages. Model hints: ${modelHints}`,
+				{ modal: true },
+				"View Request", "Allow", "Deny"
+			)
+
+			if (userResponse === "Deny") {
+				throw new Error("User denied the sampling request")
+			}
+
+			if (userResponse === "View Request") {
+				// Show the request details to the user
+				const requestDetails = JSON.stringify(request, null, 2)
+				const document = await vscode.workspace.openTextDocument({
+					content: requestDetails,
+					language: "json"
+				})
+				await vscode.window.showTextDocument(document)
+
+				// Ask again after viewing
+				const secondResponse = await vscode.window.showInformationMessage(
+					`Allow MCP server "${serverDisplayName}" to use the LLM?`,
+					{ modal: true },
+					"Allow", "Deny"
+				)
+
+				if (secondResponse !== "Allow") {
+					throw new Error("User denied the sampling request after viewing")
+				}
+			}
+
+			// If we're in first-time mode and the user approved, remember this server
+			if (approvalMode === "first-time" && (userResponse === "Allow" || userResponse === "View Request")) {
+				this.approvedSamplingServers.add(serverName)
+			}
+		}
+
+		// Convert MCP sampling request to the format expected by the MCP SDK
+		const createMessageRequest = {
+			messages: request.messages.map(msg => ({
+				role: msg.role,
+				content: msg.content
+			})),
+			systemPrompt: request.systemPrompt,
+			temperature: request.temperature,
+			maxTokens: request.maxTokens,
+			stopSequences: request.stopSequences,
+			metadata: request.metadata
+		}
+
+		try {
+			// Send the request to the MCP server
+			const response = await connection.client.request(
+				{
+					method: "sampling/createMessage",
+					params: createMessageRequest
+				},
+				CreateMessageResultSchema
+			)
+
+			// Return the sampling response
+			return {
+				completion: response.completion as string,
+				model: response.model as string | undefined,
+				finishReason: response.finishReason as string | undefined,
+				metadata: response.metadata as Record<string, unknown> | undefined
+			}
+		} catch (error) {
+			console.error(`Failed to create message for ${serverName}:`, error)
+			throw new Error(`Failed to create message: ${error instanceof Error ? error.message : String(error)}`)
+		}
 	}
 
 	async toggleToolAutoApprove(serverName: string, toolName: string, shouldAllow: boolean): Promise<void> {

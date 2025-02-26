@@ -11,6 +11,51 @@ export type McpServer = {
 	disabled?: boolean
 }
 
+// Sampling types
+export type McpSamplingMessage = {
+	role: "user" | "assistant"
+	content: Array<
+		| {
+				type: "text"
+				text: string
+		  }
+		| {
+				type: "image"
+				data: string
+				mimeType: string
+		  }
+	>
+}
+
+export type McpSamplingModelPreferences = {
+	hints?: Array<{
+		name: string
+	}>
+	costPriority?: number
+	speedPriority?: number
+	intelligencePriority?: number
+}
+
+export type McpSamplingContextInclusion = "none" | "thisServer" | "allServers"
+
+export type McpSamplingRequest = {
+	messages: McpSamplingMessage[]
+	modelPreferences?: McpSamplingModelPreferences
+	systemPrompt?: string
+	includeContext?: McpSamplingContextInclusion
+	temperature?: number
+	maxTokens?: number
+	stopSequences?: string[]
+	metadata?: Record<string, unknown>
+}
+
+export type McpSamplingResponse = {
+	completion: string
+	model?: string
+	finishReason?: string
+	metadata?: Record<string, unknown>
+}
+
 export type McpTool = {
 	name: string
 	description?: string

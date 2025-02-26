@@ -157,6 +157,21 @@
 					"default": "full",
 					"description": "Controls MCP inclusion in prompts, reduces token usage if you only need access to certain functionality."
 				},
+				"cline.mcp.sampling.approvalMode": {
+					"type": "string",
+					"enum": [
+						"always",
+						"first-time",
+						"never"
+					],
+					"enumDescriptions": [
+						"Always ask for approval before allowing MCP servers to use LLM sampling",
+						"Ask for approval the first time an MCP server uses LLM sampling, then remember the choice",
+						"Never ask for approval (automatically allow all sampling requests)"
+					],
+					"default": "always",
+					"description": "Controls how approval is handled for MCP server LLM sampling requests."
+				},
 				"cline.enableCheckpoints": {
 					"type": "boolean",
 					"default": true,
@@ -242,7 +257,7 @@
 		"@anthropic-ai/vertex-sdk": "^0.4.1",
 		"@google/generative-ai": "^0.18.0",
 		"@mistralai/mistralai": "^1.5.0",
-		"@modelcontextprotocol/sdk": "^1.0.1",
+		"@modelcontextprotocol/sdk": "1.6.0",
 		"@types/clone-deep": "^4.0.4",
 		"@types/get-folder-size": "^3.0.4",
 		"@types/pdf-parse": "^1.1.4",
