@@ -249,7 +249,7 @@ export class Controller {
 				// If user already opted in to telemetry, enable telemetry service
 				this.getStateToPostToWebview().then((state) => {
 					const { telemetrySetting } = state
-					const isOptedIn = telemetrySetting === "enabled"
+					const isOptedIn = telemetrySetting !== "disabled"
 					telemetryService.updateTelemetryState(isOptedIn)
 				})
 				break
@@ -270,12 +270,6 @@ export class Controller {
 				//this.postMessageToWebview({ type: "text", text: `Extension: ${Date.now()}` })
 				// initializing new instance of Cline will make sure that any agentically running promises in old instance don't affect our new task. this essentially creates a fresh slate for the new task
 				await this.initTask(message.text, message.images)
-				break
-			case "condense":
-				this.task?.handleWebviewAskResponse("yesButtonClicked")
-				break
-			case "reportBug":
-				this.task?.handleWebviewAskResponse("yesButtonClicked")
 				break
 			case "apiConfiguration":
 				if (message.apiConfiguration) {
@@ -673,7 +667,7 @@ export class Controller {
 
 	async updateTelemetrySetting(telemetrySetting: TelemetrySetting) {
 		await updateGlobalState(this.context, "telemetrySetting", telemetrySetting)
-		const isOptedIn = telemetrySetting === "enabled"
+		const isOptedIn = telemetrySetting !== "disabled"
 		telemetryService.updateTelemetryState(isOptedIn)
 	}
 
